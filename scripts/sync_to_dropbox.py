@@ -50,36 +50,42 @@ def remote_path(local_root: Path, file_path: Path, dropbox_root: str):
     root = dropbox_root.strip("/").strip()
     return f"/{root}/{rel}" if root else f"/{rel}"
 
+from dropbox.exceptions import ApiError
+
 def upload_file(dbx, local_root: Path, file_path: Path, dropbox_root: str):
     rp = remote_path(local_root, file_path, dropbox_root)
     size = file_path.stat().st_size
 
-    with open(file_path, "rb") as f:
-        if size <= CHUNK_SIZE:
-            dbx.files_upload(
-                f.read(),
-                rp,
-                mode=WriteMode.overwrite,
-                mute=True,
-            )
-        else:
-            session = dbx.files_upload_session_start(f.read(CHUNK_SIZE))
-            cursor = dropbox.files.UploadSessionCursor(
-                session_id=session.session_id,
-                offset=f.tell(),
-            )
-            commit = dropbox.files.CommitInfo(
-                path=rp,
-                mode=WriteMode.overwrite,
-                mute=True,
-            )
-            while f.tell() < size:
-                remaining = size - f.tell()
-                if remaining <= CHUNK_SIZE:
-                    dbx.files_upload_session_finish(f.read(CHUNK_SIZE), cursor, commit)
-                else:
-                    dbx.files_upload_session_append_v2(f.read(CHUNK_SIZE), cursor)
-                    cursor.offset = f.tell()
+    try:
+        with open(file_path, "rb") as f:
+            if size <= CHUNK_SIZE:
+                dbx.files_upload(
+                    f.read(),
+                    rp,
+                    mode=WriteMode.overwrite,
+                    mute=True,
+                )
+            else:
+                session = dbx.files_upload_session_start(f.read(CHUNK_SIZE))
+                cursor = dropbox.files.UploadSessionCursor(
+                    session_id=session.session_id,
+                    offset=f.tell(),
+                )
+                commit = dropbox.files.CommitInfo(
+                    path=rp,
+                    mode=WriteMode.overwrite,
+                    mute=True,
+                )
+                while f.tell() < size:
+                    remaining = size - f.tell()
+                    if remaining <= CHUNK_SIZE:
+                        dbx.files_upload_session_finish(f.read(CHUNK_SIZE), cursor, commit)
+                    else:
+                        dbx.files_upload_session_append_v2(f.read(CHUNK_SIZE), cursor)
+                        cursor.offset = f.tell()
+    except ApiError as e:
+        print(f"Dropbox upload failed for {rp}: {e}")
+        raise
 
     return rp
 
