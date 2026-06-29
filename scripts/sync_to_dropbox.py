@@ -41,13 +41,13 @@ def git_root():
 
 def changed_files(ref):
     p = subprocess.run(
-        ["git", "diff", "--name-only", "--diff-filter=AM", ref],
+        ["git", "diff", "--name-only", "--diff-filter=AM", "-z", ref],
         capture_output=True,
-        text=True,
+        text=False,
     )
     if p.returncode != 0:
-        raise SystemExit(p.stderr.strip() or "git diff failed")
-    return [line.strip() for line in p.stdout.splitlines() if line.strip()]
+        raise SystemExit((p.stderr or b"git diff failed").decode("utf-8", "replace"))
+    return [x.decode("utf-8", "surrogateescape") for x in p.stdout.split(b"\x00") if x]
 
 def should_sync(path: Path):
     if not path.is_file():
