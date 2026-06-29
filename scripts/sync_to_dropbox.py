@@ -6,17 +6,28 @@ from pathlib import Path
 
 import dropbox
 from dropbox.files import WriteMode
+from dropbox.exceptions import ApiError, AuthError
 
 CHUNK_SIZE = 4 * 1024 * 1024
 
-def load_token():
-    token = os.environ.get("DROPBOX_ACCESS_TOKEN")
-    if not token:
-        raise SystemExit("DROPBOX_ACCESS_TOKEN is not set")
-    return token
+def load_client():
+    refresh_token = os.environ.get("DROPBOX_REFRESH_TOKEN")
+    app_key = os.environ.get("DROPBOX_APP_KEY")
+    app_secret = os.environ.get("DROPBOX_APP_SECRET")
 
-def dbx_client():
-    return dropbox.Dropbox(load_token())
+    missing = [k for k, v in [
+        ("DROPBOX_REFRESH_TOKEN", refresh_token),
+        ("DROPBOX_APP_KEY", app_key),
+        ("DROPBOX_APP_SECRET", app_secret),
+    ] if not v]
+    if missing:
+        raise SystemExit(f"Missing env vars: {', '.join(missing)}")
+
+    return dropbox.Dropbox(
+        oauth2_refresh_token=refresh_token,
+        app_key=app_key,
+        app_secret=app_secret,
+    )
 
 def git_root():
     p = subprocess.run(
@@ -50,8 +61,6 @@ def remote_path(local_root: Path, file_path: Path, dropbox_root: str):
     root = dropbox_root.strip("/").strip()
     return f"/{root}/{rel}" if root else f"/{rel}"
 
-from dropbox.exceptions import ApiError
-
 def upload_file(dbx, local_root: Path, file_path: Path, dropbox_root: str):
     rp = remote_path(local_root, file_path, dropbox_root)
     size = file_path.stat().st_size
@@ -83,8 +92,11 @@ def upload_file(dbx, local_root: Path, file_path: Path, dropbox_root: str):
                     else:
                         dbx.files_upload_session_append_v2(f.read(CHUNK_SIZE), cursor)
                         cursor.offset = f.tell()
+    except AuthError as e:
+        print(f"AUTH ERROR for {rp}: {e}")
+        raise
     except ApiError as e:
-        print(f"Dropbox upload failed for {rp}: {e}")
+        print(f"DROPBOX API ERROR for {rp}: {e}")
         raise
 
     return rp
@@ -96,7 +108,7 @@ def main():
     args = ap.parse_args()
 
     root = git_root()
-    dbx = dbx_client()
+    dbx = load_client()
     uploaded = []
 
     for name in changed_files(args.ref):
