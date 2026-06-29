@@ -61,9 +61,32 @@ def remote_path(local_root: Path, file_path: Path, dropbox_root: str):
     root = dropbox_root.strip("/").strip()
     return f"/{root}/{rel}" if root else f"/{rel}"
 
+def ensure_parent_folders(dbx, remote_file_path: str):
+    parts = remote_file_path.strip("/").split("/")[:-1]
+    if not parts:
+        return
+
+    cur = ""
+    for part in parts:
+        cur = f"{cur}/{part}"
+        try:
+            dbx.files_create_folder_v2(cur)
+            print(f"[mkdir] {cur}")
+        except ApiError as e:
+            s = str(e)
+            if "path/conflict/folder" in s or "path/conflict" in s:
+                continue
+            if "conflict" in s:
+                continue
+            print(f"[mkdir-error] path={cur} err={e}")
+            raise
+
 def upload_file(dbx, local_root: Path, file_path: Path, dropbox_root: str):
     rp = remote_path(local_root, file_path, dropbox_root)
+    print(f"[upload] local={file_path} remote={rp}")
     size = file_path.stat().st_size
+
+    ensure_parent_folders(dbx, rp)
 
     try:
         with open(file_path, "rb") as f:
@@ -93,10 +116,10 @@ def upload_file(dbx, local_root: Path, file_path: Path, dropbox_root: str):
                         dbx.files_upload_session_append_v2(f.read(CHUNK_SIZE), cursor)
                         cursor.offset = f.tell()
     except AuthError as e:
-        print(f"AUTH ERROR for {rp}: {e}")
+        print(f"[auth-error] path={rp} err={e}")
         raise
     except ApiError as e:
-        print(f"DROPBOX API ERROR for {rp}: {e}")
+        print(f"[api-error] path={rp} err={e}")
         raise
 
     return rp
@@ -109,12 +132,21 @@ def main():
 
     root = git_root()
     dbx = load_client()
-    uploaded = []
 
+    try:
+        account = dbx.users_get_current_account()
+        print(f"[account] {account.name.display_name} <{account.email}>")
+    except Exception as e:
+        print(f"[account-error] {e}")
+        raise
+
+    uploaded = []
     for name in changed_files(args.ref):
         fp = (root / name).resolve()
         if should_sync(fp):
             uploaded.append(upload_file(dbx, root, fp, args.dropbox_root))
+        else:
+            print(f"[skip] {fp}")
 
     print(json.dumps({"uploaded": uploaded}, ensure_ascii=False, indent=2))
 
